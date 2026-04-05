@@ -105,9 +105,53 @@
                 <!-- Document Selection -->
                 <div class="material-card mb-6">
                     <h2 class="card-title">Select Document</h2>
-                    <select id="documentSelect" class="w-full rounded-md border-border-color bg-bg-primary text-text-primary p-2 focus:border-accent-primary focus:ring-accent-primary">
-                        <option value="">Choose a document...</option>
-                    </select>
+
+                    <!-- Search & Sort toolbar -->
+                    <div class="flex flex-col sm:flex-row gap-2 mb-3">
+                        <div class="relative flex-1">
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-text-secondary">
+                                <i class="fas fa-search text-xs"></i>
+                            </span>
+                            <input id="docSearchInput"
+                                   type="text"
+                                   placeholder="Search by title, correspondent or tag…"
+                                   class="w-full pl-8 pr-3 py-2 rounded-md border border-border-color bg-bg-primary text-text-primary text-sm focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary" />
+                        </div>
+                        <div class="flex gap-2 items-center">
+                            <span class="text-xs text-text-secondary whitespace-nowrap">Sort by:</span>
+                            <select id="docSortSelect"
+                                    class="rounded-md border border-border-color bg-bg-primary text-text-primary text-sm py-2 px-2 focus:outline-none focus:border-accent-primary focus:ring-1 focus:ring-accent-primary">
+                                <option value="title_asc">Title A→Z</option>
+                                <option value="title_desc">Title Z→A</option>
+                                <option value="date_desc">Date (newest)</option>
+                                <option value="date_asc">Date (oldest)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Document count badge -->
+                    <div class="flex justify-between items-center mb-2">
+                        <span id="docCountBadge" class="text-xs text-text-secondary"></span>
+                        <span id="docSelectedTitle" class="text-xs font-medium text-accent-primary truncate max-w-xs hidden"></span>
+                    </div>
+
+                    <!-- Document list -->
+                    <div id="documentListContainer"
+                         class="border border-border-color rounded-md overflow-hidden">
+                        <!-- Loading state -->
+                        <div id="docListLoading" class="flex items-center justify-center py-8 text-text-secondary text-sm">
+                            <i class="fas fa-spinner fa-spin mr-2"></i> Loading documents…
+                        </div>
+                        <!-- Scrollable list -->
+                        <div id="documentList"
+                             class="hidden divide-y divide-border-color overflow-y-auto"
+                             style="max-height: 320px;">
+                        </div>
+                        <!-- Empty state -->
+                        <div id="docListEmpty" class="hidden flex items-center justify-center py-8 text-text-secondary text-sm">
+                            <i class="fas fa-folder-open mr-2"></i> No documents match your search.
+                        </div>
+                    </div>
                 </div>
         
                 <!-- Main Grid -->
@@ -247,29 +291,145 @@ async function fetchTags() {
     }
 }
 
+// ── Document picker state ──────────────────────────────────────────────────
+let allDocuments = [];       // full unfiltered list from the server
+let filteredDocuments = [];  // subset after search + sort
+let selectedDocumentId = null;
+
 async function fetchDocuments() {
     try {
         const response = await fetch('/manual/documents');
         if (!response.ok) throw new Error('Failed to fetch documents');
         const documents = await response.json();
-        updateDocumentSelect(documents);
+        allDocuments = Array.isArray(documents) ? documents : [];
+        applyDocumentFilter();
     } catch (error) {
         showMessage('Error loading documents: ' + error.message);
+        document.getElementById('docListLoading').classList.add('hidden');
     }
 }
 
-// UI Update Functions
-function updateDocumentSelect(documents) {
-    if (!Array.isArray(documents)) return;
-    const select = document.getElementById('documentSelect');
-    select.innerHTML = '<option value="">Choose a document...</option>';
-    documents.forEach(doc => {
-        const option = document.createElement('option');
-        option.value = doc.id;
-        option.textContent = doc.title || doc.original_filename || `Document ${doc.id}`;
-        select.appendChild(option);
+// ── Filter + sort + render ─────────────────────────────────────────────────
+function applyDocumentFilter() {
+    const query = (document.getElementById('docSearchInput').value || '').toLowerCase().trim();
+    const sortKey = document.getElementById('docSortSelect').value;
+
+    // Filter
+    filteredDocuments = allDocuments.filter(doc => {
+        if (!query) return true;
+        const title = (doc.title || doc.original_filename || '').toLowerCase();
+        const correspondent = (
+            doc.correspondent
+                ? (typeof doc.correspondent === 'object' ? doc.correspondent.name : doc.correspondent)
+                : ''
+        ).toLowerCase();
+        const tags = Array.isArray(doc.tags)
+            ? doc.tags.map(t => (typeof t === 'object' ? t.name : String(t))).join(' ').toLowerCase()
+            : '';
+        return title.includes(query) || correspondent.includes(query) || tags.includes(query);
+    });
+
+    // Sort
+    filteredDocuments.sort((a, b) => {
+        if (sortKey === 'title_asc') {
+            return (a.title || '').localeCompare(b.title || '');
+        } else if (sortKey === 'title_desc') {
+            return (b.title || '').localeCompare(a.title || '');
+        } else if (sortKey === 'date_desc') {
+            return new Date(b.created_date || b.added || 0) - new Date(a.created_date || a.added || 0);
+        } else {
+            return new Date(a.created_date || a.added || 0) - new Date(b.created_date || b.added || 0);
+        }
+    });
+
+    renderDocumentList();
+}
+
+function renderDocumentList() {
+    const loading = document.getElementById('docListLoading');
+    const list    = document.getElementById('documentList');
+    const empty   = document.getElementById('docListEmpty');
+    const badge   = document.getElementById('docCountBadge');
+
+    loading.classList.add('hidden');
+
+    // Update count badge
+    const total    = allDocuments.length;
+    const filtered = filteredDocuments.length;
+    badge.textContent = total === filtered
+        ? `${total} document${total !== 1 ? 's' : ''}`
+        : `${filtered} of ${total} document${total !== 1 ? 's' : ''}`;
+
+    if (filteredDocuments.length === 0) {
+        list.classList.add('hidden');
+        empty.classList.remove('hidden');
+        return;
+    }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+
+    list.innerHTML = '';
+    filteredDocuments.forEach(doc => {
+        const title       = doc.title || doc.original_filename || `Document ${doc.id}`;
+        const dateStr     = doc.created_date || doc.added || '';
+        const dateDisplay = dateStr ? new Date(dateStr).toLocaleDateString() : '—';
+        const correspondent = doc.correspondent
+            ? (typeof doc.correspondent === 'object' ? doc.correspondent.name : doc.correspondent)
+            : '';
+        const tagCount    = Array.isArray(doc.tags) ? doc.tags.length : 0;
+        const isSelected  = String(doc.id) === String(selectedDocumentId);
+
+        const row = document.createElement('div');
+        row.dataset.docId = doc.id;
+        row.className = [
+            'flex items-center gap-3 px-3 py-2 cursor-pointer text-sm transition-colors duration-100',
+            isSelected
+                ? 'bg-accent-primary text-white'
+                : 'bg-bg-primary text-text-primary hover:bg-hover-bg'
+        ].join(' ');
+
+        row.innerHTML = `
+            <div class="flex-1 min-w-0">
+                <span class="block font-medium truncate" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+                ${correspondent
+                    ? `<span class="block text-xs truncate opacity-70" title="${escapeHtml(correspondent)}">
+                           <i class="fas fa-user mr-1"></i>${escapeHtml(correspondent)}
+                       </span>`
+                    : ''}
+            </div>
+            <div class="text-xs opacity-70 whitespace-nowrap hidden sm:block">${escapeHtml(dateDisplay)}</div>
+            <div class="text-xs opacity-70 whitespace-nowrap hidden sm:block">
+                <i class="fas fa-tag mr-1"></i>${tagCount}
+            </div>`;
+
+        row.addEventListener('click', () => {
+            selectedDocumentId = doc.id;
+            // Update selected title label
+            const label = document.getElementById('docSelectedTitle');
+            label.textContent = `Selected: ${title}`;
+            label.classList.remove('hidden');
+            // Re-render to update highlight
+            renderDocumentList();
+            // Trigger document load
+            handleDocumentSelection(doc.id);
+        });
+
+        list.appendChild(row);
     });
 }
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// (kept for backward compat — no longer used for a <select>)
+function updateDocumentSelect() {}
 
 function updateTagSelect(tags) {
     if (!Array.isArray(tags)) return;
@@ -555,10 +715,9 @@ async function updateDocumentTags() {
 
 // Initialize everything when the DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    // Document selection
-    document.getElementById('documentSelect').addEventListener('change', (e) => {
-        handleDocumentSelection(e.target.value);
-    });
+    // Document picker – search & sort
+    document.getElementById('docSearchInput').addEventListener('input', applyDocumentFilter);
+    document.getElementById('docSortSelect').addEventListener('change', applyDocumentFilter);
 
     // Analyze button
     document.getElementById('analyzeBtn').addEventListener('click', handleAnalysis);
