@@ -329,16 +329,20 @@ function applyDocumentFilter() {
         return title.includes(query) || correspondent.includes(query) || tags.includes(query);
     });
 
-    // Sort
+    // Sort — documents with no date are pushed to the end
     filteredDocuments.sort((a, b) => {
         if (sortKey === 'title_asc') {
             return (a.title || '').localeCompare(b.title || '');
         } else if (sortKey === 'title_desc') {
             return (b.title || '').localeCompare(a.title || '');
-        } else if (sortKey === 'date_desc') {
-            return new Date(b.created_date || b.added || 0) - new Date(a.created_date || a.added || 0);
         } else {
-            return new Date(a.created_date || a.added || 0) - new Date(b.created_date || b.added || 0);
+            const tsA = a.created_date || a.added ? new Date(a.created_date || a.added).getTime() : null;
+            const tsB = b.created_date || b.added ? new Date(b.created_date || b.added).getTime() : null;
+            // Push undated documents to the end regardless of sort direction
+            if (tsA === null && tsB === null) return 0;
+            if (tsA === null) return 1;
+            if (tsB === null) return -1;
+            return sortKey === 'date_desc' ? tsB - tsA : tsA - tsB;
         }
     });
 
@@ -420,6 +424,7 @@ function renderDocumentList() {
 }
 
 function escapeHtml(str) {
+    if (str == null) return '';
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
